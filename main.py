@@ -34,25 +34,20 @@ logging.basicConfig(level=logging.INFO)
 router = Router()
 
 
-CATALOG = {
-    "service": [
-        "Тату", "Маникюр", "Фотограф", "Дизайнер", "Программист",
-        "Массаж", "Ремонт", "Копирайтер", "Визажист", "Репетитор",
-    ],
-    "product": [
-        "Одежда", "Обувь", "Мебель", "Книги", "Техника",
-        "Украшения", "Косметика", "Игрушки", "Картины", "Растения",
-    ],
-    "advertising": [
-        "Реклама в Telegram", "Реклама во ВКонтакте",
-        "Реклама в Instagram", "Реклама на сайте", "Реклама у блогера",
-    ],
-}
-
-TYPE_LABELS = {
-    "service": "🛠 Услуга",
-    "product": "📦 Товар",
-    "advertising": "📣 Реклама",
+CATEGORY_LABELS = {
+    "beauty": "💄 Красота и уход",
+    "home": "🏠 Дом и ремонт",
+    "photo_video": "📸 Фото и видео",
+    "it": "💻 IT и цифровые услуги",
+    "design": "🎨 Дизайн и творчество",
+    "promotion": "📢 Реклама и продвижение",
+    "education": "📚 Обучение",
+    "business": "💼 Бизнес и консультации",
+    "health": "⚕️ Здоровье и спорт",
+    "events": "🎉 Организация мероприятий",
+    "auto": "🚗 Авто",
+    "animals": "🐾 Животные",
+    "other": "📦 Другое",
 }
 
 EXPERIENCE_LABELS = {
@@ -166,23 +161,12 @@ def continue_keyboard() -> InlineKeyboardMarkup:
     )
 
 
-def item_type_keyboard(prefix: str) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text=label, callback_data=f"{prefix}:type:{key}")]
-            for key, label in TYPE_LABELS.items()
-        ] + [[InlineKeyboardButton(text="⬅️ Назад", callback_data=f"{prefix}:back")]]
-    )
-
-
-def catalog_keyboard(prefix: str, item_type: str, query: str) -> InlineKeyboardMarkup:
-    query_l = query.lower().strip()
-    matches = [x for x in CATALOG[item_type] if query_l in x.lower()][:8]
+def category_keyboard(prefix: str) -> InlineKeyboardMarkup:
     rows = [
-        [InlineKeyboardButton(text=f"✅ {title}", callback_data=f"{prefix}:catalog:{title}")]
-        for title in matches
+        [InlineKeyboardButton(text=label, callback_data=f"{prefix}:type:{key}")]
+        for key, label in CATEGORY_LABELS.items()
     ]
-    rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data=f"{prefix}:catalog_back")])
+    rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data=f"{prefix}:back")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -245,7 +229,7 @@ def render_items(items: list[dict], heading: str) -> str:
     for item in items:
         geo = "Любой город" if item.get("any_city") else ", ".join(item.get("cities", []))
         lines.append(f"\n• <b>{item['title']}</b>")
-        lines.append(f"  {TYPE_LABELS[item['item_type']]}")
+        lines.append(f"  {CATEGORY_LABELS.get(item['item_type'], item['item_type'])}")
         lines.append(f"  📍 {geo}")
         if item.get("experience") and item["experience"] != "skip":
             lines.append(f"  🕒 {EXPERIENCE_LABELS[item['experience']]}")
@@ -337,8 +321,8 @@ async def receive_cities(message: Message, state: FSMContext) -> None:
 async def can_add(callback: CallbackQuery, state: FSMContext) -> None:
     await state.set_state(Registration.can_type)
     await callback.message.edit_text(
-        "Что вы можете предложить?",
-        reply_markup=item_type_keyboard("can"),
+        "Выбери категорию того, что ты можешь предложить:",
+        reply_markup=category_keyboard("can"),
     )
     await callback.answer()
 
@@ -354,8 +338,11 @@ async def can_type(callback: CallbackQuery, state: FSMContext) -> None:
     await state.update_data(draft={"direction": "can", "item_type": item_type})
     await state.set_state(Registration.can_search)
     await callback.message.edit_text(
-        f"{TYPE_LABELS[item_type]}\n\n🔎 Введите, что вы предлагаете.\n"
-        "Например: тату, фотограф, мебель"
+        f"{CATEGORY_LABELS[item_type]}\n\n"
+        "<b>Как называется то, что ты предлагаешь?</b>\n\n"
+        "Напиши коротко и в общем виде.\n"
+        "Например: работа с волосами, фотосъёмка, настройка рекламы.\n\n"
+        "Подробности добавишь на следующем шаге 😊"
     )
     await callback.answer()
 
@@ -367,39 +354,20 @@ async def can_type_back(callback: CallbackQuery, state: FSMContext) -> None:
 
 @router.message(Registration.can_search)
 async def can_search(message: Message, state: FSMContext) -> None:
-    data = await state.get_data()
-    draft = data["draft"]
-    query = (message.text or "").strip()
-    kb = catalog_keyboard("can", draft["item_type"], query)
-    if len(kb.inline_keyboard) == 1:
-        await message.answer("Ничего не найдено. Попробуйте более общее название.")
+    title = (message.text or "").strip()
+    if not 2 <= len(title) <= 100:
+        await message.answer("Название должно быть длиной от 2 до 100 символов.")
         return
-    await message.answer("Выберите подходящий вариант:", reply_markup=kb)
 
-
-@router.callback_query(Registration.can_search, F.data.startswith("can:catalog:"))
-async def can_catalog_select(callback: CallbackQuery, state: FSMContext) -> None:
-    title = callback.data.split(":", 2)[2]
     data = await state.get_data()
     draft = data["draft"]
     draft.update({"title": title, "selected_cities": [], "any_city": False})
     await state.update_data(draft=draft)
     await state.set_state(Registration.can_city_select)
-    await callback.message.edit_text(
+    await message.answer(
         "📍 <b>Где доступно это предложение?</b>",
         reply_markup=city_keyboard(data["cities"], [], False, "can"),
     )
-    await callback.answer()
-
-
-@router.callback_query(Registration.can_search, F.data == "can:catalog_back")
-async def can_catalog_back(callback: CallbackQuery, state: FSMContext) -> None:
-    await state.set_state(Registration.can_type)
-    await callback.message.edit_text(
-        "Что вы можете предложить?",
-        reply_markup=item_type_keyboard("can"),
-    )
-    await callback.answer()
 
 
 @router.callback_query(Registration.can_city_select, F.data.startswith("can:city:"))
@@ -447,8 +415,10 @@ async def can_city_done(callback: CallbackQuery, state: FSMContext) -> None:
         return
     await state.set_state(Registration.can_description)
     await callback.message.edit_text(
-        "📝 <b>Опишите предложение</b>\n\n"
-        "Что именно вы готовы сделать или передать? Что входит в предложение?\n\n"
+        "📝 <b>Расскажи подробнее, что именно ты делаешь</b>\n\n"
+        "Например: ботокс для волос, химическая завивка, окрашивание "
+        "или уходовые процедуры.\n\n"
+        "Можно также написать, что входит в предложение и какие есть условия.\n\n"
         "Поле необязательное.",
         reply_markup=skip_keyboard("can:description_skip"),
     )
@@ -458,7 +428,10 @@ async def can_city_done(callback: CallbackQuery, state: FSMContext) -> None:
 @router.callback_query(Registration.can_city_select, F.data == "can:city_back")
 async def can_city_back(callback: CallbackQuery, state: FSMContext) -> None:
     await state.set_state(Registration.can_search)
-    await callback.message.edit_text("🔎 Введите другое название предложения.")
+    await callback.message.edit_text(
+        "<b>Как называется то, что ты предлагаешь?</b>\n\n"
+        "Напиши коротко и в общем виде. Подробности добавишь следующим шагом."
+    )
     await callback.answer()
 
 
@@ -468,16 +441,13 @@ async def after_can_description(target: Message | CallbackQuery, state: FSMConte
     draft["description"] = description
     await state.update_data(draft=draft)
 
-    if draft["item_type"] == "service":
-        await state.set_state(Registration.can_experience)
-        text = "🕒 <b>Опыт работы</b>\n\nВыберите подходящий вариант."
-        if isinstance(target, CallbackQuery):
-            await target.message.edit_text(text, reply_markup=experience_keyboard())
-            await target.answer()
-        else:
-            await target.answer(text, reply_markup=experience_keyboard())
+    await state.set_state(Registration.can_experience)
+    text = "🕒 <b>Опыт работы</b>\n\nВыбери подходящий вариант."
+    if isinstance(target, CallbackQuery):
+        await target.message.edit_text(text, reply_markup=experience_keyboard())
+        await target.answer()
     else:
-        await ask_can_link(target, state)
+        await target.answer(text, reply_markup=experience_keyboard())
 
 
 @router.message(Registration.can_description)
@@ -556,8 +526,8 @@ async def can_link_skip(callback: CallbackQuery, state: FSMContext) -> None:
 async def want_add(callback: CallbackQuery, state: FSMContext) -> None:
     await state.set_state(Registration.want_type)
     await callback.message.edit_text(
-        "Что вы хотите получить взамен?",
-        reply_markup=item_type_keyboard("want"),
+        "Выбери категорию того, что ты хочешь получить взамен:",
+        reply_markup=category_keyboard("want"),
     )
     await callback.answer()
 
@@ -578,7 +548,11 @@ async def want_type(callback: CallbackQuery, state: FSMContext) -> None:
     await state.update_data(draft={"direction": "want", "item_type": item_type})
     await state.set_state(Registration.want_search)
     await callback.message.edit_text(
-        f"{TYPE_LABELS[item_type]}\n\n🔎 Введите, что вы хотите найти."
+        f"{CATEGORY_LABELS[item_type]}\n\n"
+        "<b>Как называется то, что ты хочешь получить?</b>\n\n"
+        "Напиши коротко и в общем виде.\n"
+        "Например: работа с волосами, фотосъёмка, помощь с рекламой.\n\n"
+        "Подробности добавишь на следующем шаге 😊"
     )
     await callback.answer()
 
@@ -590,39 +564,20 @@ async def want_type_back(callback: CallbackQuery, state: FSMContext) -> None:
 
 @router.message(Registration.want_search)
 async def want_search(message: Message, state: FSMContext) -> None:
-    data = await state.get_data()
-    draft = data["draft"]
-    query = (message.text or "").strip()
-    kb = catalog_keyboard("want", draft["item_type"], query)
-    if len(kb.inline_keyboard) == 1:
-        await message.answer("Ничего не найдено. Попробуйте более общее название.")
+    title = (message.text or "").strip()
+    if not 2 <= len(title) <= 100:
+        await message.answer("Название должно быть длиной от 2 до 100 символов.")
         return
-    await message.answer("Выберите подходящий вариант:", reply_markup=kb)
 
-
-@router.callback_query(Registration.want_search, F.data.startswith("want:catalog:"))
-async def want_catalog_select(callback: CallbackQuery, state: FSMContext) -> None:
-    title = callback.data.split(":", 2)[2]
     data = await state.get_data()
     draft = data["draft"]
     draft.update({"title": title, "selected_cities": [], "any_city": False})
     await state.update_data(draft=draft)
     await state.set_state(Registration.want_city_select)
-    await callback.message.edit_text(
-        "📍 <b>Где вы хотите найти это?</b>",
+    await message.answer(
+        "📍 <b>Где ты хочешь найти это?</b>",
         reply_markup=city_keyboard(data["cities"], [], False, "want"),
     )
-    await callback.answer()
-
-
-@router.callback_query(Registration.want_search, F.data == "want:catalog_back")
-async def want_catalog_back(callback: CallbackQuery, state: FSMContext) -> None:
-    await state.set_state(Registration.want_type)
-    await callback.message.edit_text(
-        "Что вы хотите получить взамен?",
-        reply_markup=item_type_keyboard("want"),
-    )
-    await callback.answer()
 
 
 @router.callback_query(Registration.want_city_select, F.data.startswith("want:city:"))
@@ -679,7 +634,10 @@ async def want_city_done(callback: CallbackQuery, state: FSMContext) -> None:
 @router.callback_query(Registration.want_city_select, F.data == "want:city_back")
 async def want_city_back(callback: CallbackQuery, state: FSMContext) -> None:
     await state.set_state(Registration.want_search)
-    await callback.message.edit_text("🔎 Введите другое название.")
+    await callback.message.edit_text(
+        "<b>Как называется то, что ты хочешь получить?</b>\n\n"
+        "Напиши коротко и в общем виде. Подробности добавишь следующим шагом."
+    )
     await callback.answer()
 
 
